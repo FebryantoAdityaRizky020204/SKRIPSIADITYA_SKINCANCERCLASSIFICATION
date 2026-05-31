@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 from inference import (
     load_model,
     predict,
-    generate_gradcam,
     CLASS_DESCRIPTIONS,
     DISEASE_DESCRIPTION,
     CLASS_RISK,
@@ -52,7 +51,15 @@ except Exception as e:
 # ======================================================
 # HEADER
 # ======================================================
-st.title("KLASIFIKASI CITRA MEDIS")
+st.title("🔬 Klasifikasi Lesi Kulit")
+st.caption(
+    "Arsitektur **EfficientNet-B0** · "
+    "Dataset HAM10000 · 7 Kelas Lesi Kulit"
+)
+st.caption(
+    "⚠️ Hasil ini bersifat eksperimental dan hanya untuk keperluan "
+    "penelitian. **Tidak menggantikan diagnosis medis profesional.**"
+)
 st.markdown("---")
 
 col1, col2 = st.columns([3, 1])
@@ -99,10 +106,12 @@ with col1:
     )
 
     display_image = None
+    source_label  = ""
 
     if uploaded_file is not None:
 
         display_image = Image.open(uploaded_file).convert("RGB")
+        source_label  = f"📤 Unggahan: **{uploaded_file.name}**"
 
         st.session_state.selected_img_path = None
         st.session_state.result = None
@@ -115,11 +124,18 @@ with col1:
 
     if display_image:
 
-        st.image(display_image, use_container_width=True)
+        # st.image(display_image, use_container_width=True)
+
+        prev_col, _ = st.columns([1, 1])
+        with prev_col:
+            st.markdown(source_label)
+            st.image(display_image, use_container_width=True)
+        st.markdown("")
 
         if st.button(
-            "Mulai Klasifikasi",
+            "🔍 Mulai Klasifikasi",
             type="primary",
+            use_container_width=True,
             disabled=not model_loaded
         ):
 
@@ -132,18 +148,9 @@ with col1:
                     STD
                 )
 
-                heatmap_img, _ = generate_gradcam(
-                    model,
-                    display_image,
-                    MEAN,
-                    STD,
-                    pred_idx
-                )
-
                 st.session_state.result = (
                     probs,
-                    pred_idx,
-                    heatmap_img
+                    pred_idx
                 )
 
         # ==================================================
@@ -151,7 +158,7 @@ with col1:
         # ==================================================
         if st.session_state.result:
 
-            probs, pred_idx, heatmap_img = st.session_state.result
+            probs, pred_idx = st.session_state.result
 
             pred_class = CLASS_NAMES[pred_idx]
             confidence = probs[pred_idx] * 100
@@ -160,7 +167,7 @@ with col1:
             risk_icon = CLASS_RISK_ICON[risk]
 
             st.markdown("---")
-            st.subheader("Hasil Klasifikasi")
+            st.subheader("📊 Hasil Klasifikasi")
 
             c1, c2, c3 = st.columns(3)
 
@@ -180,7 +187,7 @@ with col1:
             )
 
             st.info(
-                f"**{pred_class.upper()}**\n\n"
+                f"**({pred_class.upper()})** "
                 f"{CLASS_DESCRIPTIONS[pred_class]}\n\n"
                 f"{DISEASE_DESCRIPTION[pred_class]}"
             )
@@ -188,27 +195,50 @@ with col1:
             # ==========================================
             # GRAFIK PROBABILITAS
             # ==========================================
-            sorted_idx = np.argsort(probs)
+
+            # ── Horizontal bar chart semua probabilitas ───────────────────────
+            sorted_idx   = np.argsort(probs)        # ascending untuk plotly y-axis
+            sorted_names = [CLASS_NAMES[i].upper() for i in sorted_idx]
+            sorted_probs = [float(probs[i]) * 100  for i in sorted_idx]
+            bar_colors   = [
+                '#E53E3E' if CLASS_RISK[CLASS_NAMES[i]] == 'Tinggi'
+                else '#DD6B20' if CLASS_RISK[CLASS_NAMES[i]] == 'Sedang'
+                else '#38A169'
+                for i in sorted_idx
+            ]
+            # Highlight predicted class
+            bar_opacity = [
+                1.0 if CLASS_NAMES[i] == pred_class else 0.55
+                for i in sorted_idx
+            ]
 
             fig = go.Figure(go.Bar(
-                x=[probs[i] * 100 for i in sorted_idx],
-                y=[CLASS_NAMES[i].upper() for i in sorted_idx],
-                orientation='h',
-                text=[
-                    f"{probs[i]*100:.1f}%"
-                    for i in sorted_idx
-                ],
-                textposition='outside'
+                x           = sorted_probs,
+                y           = sorted_names,
+                orientation = 'h',
+                marker      = dict(color=bar_colors, opacity=bar_opacity),
+                text        = [f"{p:.1f}%" for p in sorted_probs],
+                textposition= 'outside',
+                cliponaxis  = False,
             ))
-
             fig.update_layout(
-                title="Distribusi Probabilitas",
-                height=300
+                title       = "Distribusi Probabilitas Seluruh Kelas",
+                xaxis_title = "Probabilitas (%)",
+                xaxis       = dict(range=[0, 115], showgrid=True,
+                                   gridcolor='rgba(0,0,0,0.07)'),
+                yaxis       = dict(showgrid=False),
+                height      = 310,
+                margin      = dict(l=10, r=70, t=44, b=30),
+                plot_bgcolor  = 'rgba(0,0,0,0)',
+                paper_bgcolor = 'rgba(0,0,0,0)',
+                font          = dict(size=12),
+                showlegend    = False,
             )
+            st.plotly_chart(fig, use_container_width=True)
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
+            st.caption(
+                "⚠️ Hasil ini bersifat eksperimental dan hanya untuk keperluan "
+                "penelitian. **Tidak menggantikan diagnosis medis profesional.**"
             )
 
     else:

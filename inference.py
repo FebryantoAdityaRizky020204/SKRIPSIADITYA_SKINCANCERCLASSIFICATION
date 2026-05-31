@@ -23,7 +23,7 @@ CLASS_DESCRIPTIONS = {
 
 DISEASE_DESCRIPTION = {
     'akiec': 'Lesi pra-kanker yang kasar dan bersisik pada permukaan kulit akibat paparan sinar matahari kronis.',
-    'bcc'  : 'Jenis kanker kulit paling umum yang tumbuh lambat, jarang menyebar, dan sering muncul di area yang terpapar surya.',
+    'bcc'  : 'Jenis kanker kulit paling umum yang tumbuh lambat, jarang menyebar, dan sering muncul di area yang terpapar matahari.',
     'bkl'  : 'Kelompok lesi kulit jinak non-kanker yang memiliki tampilan menyerupai kutil atau bercak kerak kecokelatan.',
     'df'   : 'Benjolan kecil bersifat jinak pada jaringan ikat kulit yang biasanya terasa keras dan berwarna gelap.',
     'mel'  : 'Kanker kulit paling agresif dan berbahaya yang berkembang dari sel pigmen (melanosit) dengan risiko penyebaran tinggi.',
@@ -116,83 +116,3 @@ def predict(model, image: Image.Image, mean, std):
     probs_np = probs.cpu().numpy()
     pred_idx = int(probs.argmax().item())
     return probs_np, pred_idx
-
-
-# =============================================================================
-# GRAD-CAM
-# =============================================================================
-def generate_gradcam(model, image: Image.Image, mean, std,
-                     class_idx: int, alpha: float = 0.45):
-    """
-    Grad-CAM menggunakan conv_head EfficientNet-B0 sebagai target layer.
-    Layer ini menghasilkan feature map (B, 1280, 7, 7) — representasi
-    paling abstrak sebelum global average pooling.
-
-    Args:
-        model     : EfficientNet-B0 (eval mode)
-        image     : PIL Image asli (sebelum preprocessing)
-        mean, std : dari checkpoint, untuk preprocessing konsisten
-        class_idx : indeks kelas target (biasanya pred_idx)
-        alpha     : kekuatan overlay heatmap (0=tidak terlihat, 1=penuh)
-
-    Returns:
-        overlay   : PIL Image — gambar asli + heatmap
-        cam       : np.ndarray (224,224) nilai CAM ternormalisasi [0,1]
-    """
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=mean, std=std),
-    ])
-
-    device = next(model.parameters()).device
-    tensor = transform(image.convert('RGB')).unsqueeze(0).to(device)
-
-    activations = {}
-    gradients   = {}
-
-    def fwd_hook(module, inp, out):
-        activations['feat'] = out
-
-    def bwd_hook(module, grad_in, grad_out):
-        gradients['feat'] = grad_out[0]
-
-    # Target: conv_head — Conv2d terakhir sebelum GAP di EfficientNet-B0
-    # Menghasilkan feature map (B, 1280, 7, 7)
-    target_layer = model.conv_head
-    h_fwd = target_layer.register_forward_hook(fwd_hook)
-    h_bwd = target_layer.register_full_backward_hook(bwd_hook)
-
-    try:
-        model.zero_grad()
-        with torch.enable_grad():
-            output = model(tensor)           # (1, num_classes)
-            score  = output[0, class_idx]    # skor kelas target
-            score.backward()
-
-        grads   = gradients['feat']          # (1, 1280, 7, 7)
-        acts    = activations['feat']        # (1, 1280, 7, 7)
-
-        # Bobot = rata-rata global gradient per channel
-        weights = grads.mean(dim=[2, 3], keepdim=True)  # (1, 1280, 1, 1)
-
-        # Kombinasi linear berbobot + ReLU
-        cam = F.relu((weights * acts).sum(dim=1, keepdim=True))  # (1, 1, 7, 7)
-
-        # Upsample ke 224×224
-        cam = F.interpolate(cam, size=(224, 224),
-                            mode='bilinear', align_corners=False)
-
-        cam = cam.squeeze().cpu().detach().numpy()
-        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-
-    finally:
-        h_fwd.remove()
-        h_bwd.remove()
-
-    # Overlay: gambar asli + colormap jet
-    img_np  = np.array(image.resize((224, 224)).convert('RGB')).astype(float)
-    heatmap = (mpl_cm.jet(cam)[:, :, :3] * 255).astype(float)  # (224,224,3)
-    overlay = np.clip((1 - alpha) * img_np + alpha * heatmap, 0, 255).astype(np.uint8)
-
-    return Image.fromarray(overlay), cam
