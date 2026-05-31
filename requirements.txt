@@ -5,3 +5,5 @@ matplotlib
 pandas
 scikit-learn
 streamlit-option-menu
+torch
+timm
