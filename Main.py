@@ -211,25 +211,6 @@ with col1:
                 use_container_width=True
             )
 
-            # ==========================================
-            # GRAD-CAM
-            # ==========================================
-            st.subheader("Grad-CAM")
-
-            g1, g2 = st.columns(2)
-
-            with g1:
-                st.image(
-                    display_image.resize((224,224)),
-                    caption="Gambar Asli"
-                )
-
-            with g2:
-                st.image(
-                    heatmap_img,
-                    caption="Grad-CAM"
-                )
-
     else:
         st.info(
             "Silakan unggah gambar atau pilih contoh gambar di sebelah kanan."
