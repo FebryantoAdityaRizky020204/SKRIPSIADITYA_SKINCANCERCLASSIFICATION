@@ -1,16 +1,15 @@
+from matplotlib import cm as mpl_cm
+
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import timm
 import numpy as np
 from PIL import Image
-from matplotlib import cm as mpl_cm
 
 # =============================================================================
-# KONFIGURASI KELAS
+# KONFIGURASI KELAS (Bisa diimpor oleh app.py)
 # =============================================================================
-# CLASS_NAMES diambil langsung dari checkpoint saat load_model()
-
 CLASS_DESCRIPTIONS = {
     'akiec': 'Actinic Keratosis / Intraepithelial Carcinoma',
     'bcc'  : 'Basal Cell Carcinoma (Karsinoma Sel Basal)',
@@ -31,88 +30,62 @@ DISEASE_DESCRIPTION = {
     'vasc' : 'Kelainan atau pertumbuhan pada pembuluh darah di kulit yang biasanya tampak sebagai bercak merah atau keunguan.'
 }
 
-CLASS_RISK = {
-    'akiec': 'Tinggi',
-    'bcc'  : 'Tinggi',
-    'mel'  : 'Tinggi',
-    'vasc' : 'Sedang',
-    'bkl'  : 'Rendah',
-    'df'   : 'Rendah',
-    'nv'   : 'Rendah',
-}
+CLASS_RISK = {'akiec': 'Tinggi', 'bcc': 'Tinggi', 'mel': 'Tinggi', 'vasc': 'Sedang', 'bkl': 'Rendah', 'df': 'Rendah', 'nv': 'Rendah'}
+CLASS_RISK_COLOR = {'Tinggi': '#E53E3E', 'Sedang': '#DD6B20', 'Rendah': '#38A169'}
+CLASS_RISK_ICON = {'Tinggi': '🔴', 'Sedang': '🟡', 'Rendah': '🟢'}
 
-CLASS_RISK_COLOR = {
-    'Tinggi': '#E53E3E',
-    'Sedang': '#DD6B20',
-    'Rendah': '#38A169',
-}
-
-CLASS_RISK_ICON = {
-    'Tinggi': '🔴',
-    'Sedang': '🟡',
-    'Rendah': '🟢',
-}
-
-# =============================================================================
-# LOAD MODEL — membaca mean, std, dan class_names langsung dari checkpoint
-# =============================================================================
-def load_model(model_path: str):
-    device     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # weights_only=False diperlukan karena checkpoint menyimpan numpy array
-    # (mean, std, class_names) yang diblokir oleh default PyTorch 2.6
+def _load_checkpoint(model_path: str):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    return checkpoint, device
 
-    class_names = checkpoint['class_names']
-    mean        = checkpoint['mean']
-    std         = checkpoint['std']
-
-    # Pastikan mean dan std dalam format list of float
-    mean = [float(v) for v in mean]
-    std  = [float(v) for v in std]
-
-    model = timm.create_model(
-        'efficientnet_b0',
-        pretrained  = False,
-        num_classes = len(class_names),
-    )
-
-    state_dict = checkpoint['model_state_dict']
+def _build_model(model_name: str, num_classes: int, state_dict: dict, device):
+    model = timm.create_model(model_name, pretrained=False, num_classes=num_classes)
     if any(k.startswith('module.') for k in state_dict.keys()):
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
+    return model
 
-    print(f"Model loaded  : {model_path}")
-    print(f"Device        : {device}")
-    print(f"Classes       : {class_names}")
-    print(f"Norm mean     : {mean}")
-    print(f"Norm std      : {std}")
+def _parse_norm(mean, std):
+    return [float(v) for v in mean], [float(v) for v in std]
+
+def load_model_gatekeeper_effnet(model_path: str):
+    checkpoint, device = _load_checkpoint(model_path)
+    class_names = checkpoint.get('class_names', ['Bukan Kulit', 'Kulit'])
+    mean, std   = _parse_norm(checkpoint['mean'], checkpoint['std'])
+    model = _build_model(checkpoint.get('model_architecture', 'efficientnet_b0'), len(class_names), checkpoint['model_state_dict'], device)
     return model, class_names, mean, std
 
+def load_model_disease_effnet(model_path: str):
+    checkpoint, device = _load_checkpoint(model_path)
+    class_names = checkpoint['class_names']
+    mean, std   = _parse_norm(checkpoint['mean'], checkpoint['std'])
+    model = _build_model(checkpoint.get('model_architecture', 'efficientnet_b0'), len(class_names), checkpoint['model_state_dict'], device)
+    return model, class_names, mean, std
 
-# =============================================================================
-# INFERENCE
-# =============================================================================
-@torch.no_grad()
-def predict(model, image: Image.Image, mean, std):
-    """
-    Preprocessing konsisten dengan training:
-    - Resize ke 224×224
-    - ToTensor (skala [0,1])
-    - Normalize dengan mean & std dari checkpoint
-    """
+def _preprocess(image: Image.Image, mean, std) -> torch.Tensor:
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std),
     ])
-    device   = next(model.parameters()).device
-    tensor   = transform(image.convert('RGB')).unsqueeze(0).to(device)
-    logits   = model(tensor)
-    probs    = F.softmax(logits, dim=1).squeeze(0)
-    probs_np = probs.cpu().numpy()
-    pred_idx = int(probs.argmax().item())
-    return probs_np, pred_idx
+    return transform(image.convert('RGB')).unsqueeze(0)
+
+@torch.no_grad()
+def predict_gatekeeper_effnet(model, image: Image.Image, mean, std):
+    device = next(model.parameters()).device
+    tensor = _preprocess(image, mean, std).to(device)
+    logits = model(tensor)
+    probs  = F.softmax(logits, dim=1).squeeze(0)
+    return probs.cpu().numpy(), int(probs.argmax().item())
+
+@torch.no_grad()
+def predict_disease_effnet(model, image: Image.Image, mean, std):
+    device = next(model.parameters()).device
+    tensor = _preprocess(image, mean, std).to(device)
+    logits = model(tensor)
+    probs  = F.softmax(logits, dim=1).squeeze(0)
+    return probs.cpu().numpy(), int(probs.argmax().item())

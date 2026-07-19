@@ -3,245 +3,246 @@ import os
 import numpy as np
 from PIL import Image
 import plotly.graph_objects as go
+import pandas as pd
 
+# =============================================================================
+# KONFIGURASI PATH MODEL
+# =============================================================================
+# 1. EFFICIENTNET B0
+EFFNET_GK_PATH  = 'model/best_efficientnet_b0_kulit_vs_bukankulit.pth'
+EFFNET_DIS_PATH = 'model/best_efficientnet_b0_pretrained.pth'
+
+REF_FOLDER = 'ref_image'
+GATEKEEPER_THRESHOLD = 0.6
+
+# =============================================================================
+# IMPOR MODUL INFERENSI
+# =============================================================================
+# 1. IMPOR EFFICIENTNET (Selalu Aman)
 from inference import (
-    load_model,
-    predict,
-    CLASS_DESCRIPTIONS,
-    DISEASE_DESCRIPTION,
-    CLASS_RISK,
-    CLASS_RISK_COLOR,
-    CLASS_RISK_ICON
+    load_model_gatekeeper_effnet, load_model_disease_effnet, 
+    predict_gatekeeper_effnet, predict_disease_effnet,
+    CLASS_DESCRIPTIONS, DISEASE_DESCRIPTION, CLASS_RISK, CLASS_RISK_COLOR, CLASS_RISK_ICON
 )
 
-# ======================================================
-# CONFIG
-# ======================================================
-MODEL_PATH = "model/best_efficientnet_b0_pretrained.pth"
-REF_FOLDER = "ref_image"
 
-st.set_page_config(
-    page_title="Sistem Klasifikasi Penyakit Kulit",
-    layout="wide"
-)
+st.set_page_config(page_title="Klasifikasi Lesi Kulit", page_icon="🔬", layout="wide")
 
-# ======================================================
-# SESSION STATE
-# ======================================================
-if "selected_img_path" not in st.session_state:
+# =============================================================================
+# LOAD MODEL CACHING
+# =============================================================================
+@st.cache_resource(show_spinner="Memuat model EfficientNet-B0...")
+def get_effnet_models():
+    gk = load_model_gatekeeper_effnet(EFFNET_GK_PATH)
+    dis = load_model_disease_effnet(EFFNET_DIS_PATH)
+    return gk, dis
+
+# =============================================================================
+# SESSION STATE & CALLBACK
+# =============================================================================
+if 'selected_img_path' not in st.session_state:
     st.session_state.selected_img_path = None
-
-if "result" not in st.session_state:
+if 'result' not in st.session_state:
     st.session_state.result = None
 
-# ======================================================
-# LOAD MODEL
-# ======================================================
-@st.cache_resource
-def get_model():
-    return load_model(MODEL_PATH)
+# akan dipanggil setiap kali dropdown model diubah
+def reset_hasil():
+    st.session_state.result = None
 
-try:
-    model, CLASS_NAMES, MEAN, STD = get_model()
-    model_loaded = True
-except Exception as e:
-    st.error(f"Gagal memuat model: {e}")
-    model_loaded = False
+# =============================================================================
+# HEADER & INFORMASI MODEL
+# =============================================================================
+st.title("🔬 Sistem Klasifikasi Lesi Kulit")
 
-# ======================================================
-# HEADER
-# ======================================================
-st.title("🔬 Klasifikasi Lesi Kulit")
-st.caption(
-    "Arsitektur **EfficientNet-B0** · "
-    "Dataset HAM10000 · 7 Kelas Lesi Kulit"
-)
-st.caption(
-    "⚠️ Hasil ini bersifat eksperimental dan hanya untuk keperluan "
-    "penelitian. **Tidak menggantikan diagnosis medis profesional.**"
-)
+model_df = pd.DataFrame({
+    'MODEL': ['EfficientNet-B0', 'Vision Mamba', 'Hybrid (EfficientNet-B0 + Vision Mamba)'],
+    'Accuracy': ["0,8810 ± 0,0087", "0,7874 ± 0,0180", "0,8732 ± 0,0059 "],
+    "Precision": ["0,8429 ± 0,0188", "0,6466 ± 0,0275", "0,8341 ± 0,0215"],
+    "Recall": ["0,8137 ± 0,0099", "0,7066 ± 0,0096", "0,7914 ± 0,0152"],
+    "F1-Score": ["0,8250 ± 0,0116", "0,6699 ± 0,0145", "0,8095 ± 0,0075"]
+})
+
+def highlight_except_model_name(row):
+    styles = []
+    if row['MODEL'] == 'EfficientNet-B0':
+        for col in row.index:
+            if col == 'MODEL':
+                styles.append('')
+            else:
+                styles.append('background-color: #3874FF; color: white;') 
+    else:
+        styles = [''] * len(row)
+    return styles
+
+model_styled_df = model_df.style.apply(highlight_except_model_name, axis=1)
+
+with st.expander("Model Information", icon="📃"):
+    st.write('''
+        Model dilatih menggunakan **Dataset HAM10000 - 7 Kelas Penyakit Kulit**, dengan rincian kinerja model:
+    ''')
+    st.dataframe(model_styled_df, hide_index=True, width="content")
+    st.write('''
+        Informasi lebih lanjut klik link berikut: [Github](https://github.com/FebryantoAdityaRizky020204/SKRIPSIADITYA_SKINCANCERCLASSIFICATION.git)
+    ''')
+
+# =============================================================================
+# PEMILIHAN MODEL HORIZONTAL
+# =============================================================================
+col_teks, col_dropdown = st.columns([1, 2], vertical_alignment="center")
+
+with col_teks:
+    st.markdown("**⚙️ Pilih Arsitektur Model:**")
+
+with col_dropdown:
+    pilihan_model = st.selectbox(
+        "Pilih Arsitektur Model:",
+        [
+            "EfficientNet-B0", 
+            "Vision Mamba - Tidak Tersedia di env ini",
+            "Hybrid (EfficientNet + Vision Mamba) - Tidak Tersedia di env ini", 
+        ],
+        label_visibility="collapsed",
+        on_change=reset_hasil
+    )
+
+
+st.caption("⚠️ Hasil ini bersifat eksperimental dan hanya untuk keperluan penelitian. **Tidak menggantikan diagnosis medis profesional.**")
 st.markdown("---")
 
+# =============================================================================
+# PEMUATAN MODEL BERDASARKAN PILIHAN DROPDOWN
+# =============================================================================
+model_ready = False
+
+if pilihan_model == "EfficientNet-B0":
+    try:
+        (gk_model, gk_names, gk_mean, gk_std), (dis_model, dis_names, dis_mean, dis_std) = get_effnet_models()
+        model_ready = True
+    except Exception as e:
+        st.error(f"Gagal memuat model EfficientNet: {e}")
+
+elif pilihan_model in ["Hybrid (EfficientNet + Vision Mamba) - Tidak Tersedia di env ini", "Vision Mamba - Tidak Tersedia di env ini"]:
+    st.error(f"⚠️ **Model {pilihan_model} tidak dapat berjalan di environment ini.**\n\nLibrary yang dibutuhkan tidak lengkap (berjalan di server tanpa GPU)")
+
+# =============================================================================
+# LAYOUT UTAMA
+# =============================================================================
 col1, col2 = st.columns([3, 1])
 
-# ======================================================
-# PANEL CONTOH GAMBAR
-# ======================================================
+# Panel Contoh Gambar (Kanan)
 with col2:
-    st.subheader("Contoh Gambar")
-
-    with st.container(height=500):
+    st.subheader("📂 Contoh Gambar")
+    with st.container(height=620):
         if os.path.exists(REF_FOLDER):
-
-            file_list = sorted([
-                f for f in os.listdir(REF_FOLDER)
-                if f.lower().endswith(("jpg", "jpeg", "png"))
-            ])
-
+            file_list = sorted([f for f in os.listdir(REF_FOLDER) if f.lower().endswith(('png', 'jpg', 'jpeg'))])
             for file_name in file_list:
-
                 img_path = os.path.join(REF_FOLDER, file_name)
-
-                st.image(
-                    Image.open(img_path),
-                    use_container_width=True
-                )
-
-                if st.button(
-                    f"Gunakan {file_name}",
-                    key=file_name
-                ):
+                st.image(Image.open(img_path), use_container_width=True)
+                label = os.path.splitext(file_name)[0].upper()
+                if st.button(f"▶ {label}", key=file_name, use_container_width=True):
                     st.session_state.selected_img_path = img_path
                     st.session_state.result = None
                     st.rerun()
+        else:
+            st.warning("Folder contoh tidak ditemukan.")
 
-# ======================================================
-# PANEL UTAMA
-# ======================================================
+# Panel Utama (Kiri)
 with col1:
-
-    uploaded_file = st.file_uploader(
-        "Unggah gambar penyakit...",
-        type=["jpg", "jpeg", "png"]
-    )
-
+    uploaded_file = st.file_uploader("Unggah Gambar Lesi Kulit", type=["jpg", "jpeg", "png"])
     display_image = None
-    source_label  = ""
-
+    
     if uploaded_file is not None:
-
-        display_image = Image.open(uploaded_file).convert("RGB")
-        source_label  = f"📤 Unggahan: **{uploaded_file.name}**"
-
+        display_image = Image.open(uploaded_file).convert('RGB')
         st.session_state.selected_img_path = None
         st.session_state.result = None
+    elif st.session_state.selected_img_path is not None:
+        display_image = Image.open(st.session_state.selected_img_path).convert('RGB')
 
-    elif st.session_state.selected_img_path:
-
-        display_image = Image.open(
-            st.session_state.selected_img_path
-        ).convert("RGB")
-
-    if display_image:
-
-        # st.image(display_image, use_container_width=True)
-
+    if display_image is not None:
         prev_col, _ = st.columns([1, 1])
         with prev_col:
-            st.markdown(source_label)
             st.image(display_image, use_container_width=True)
+
         st.markdown("")
 
-        if st.button(
-            "🔍 Mulai Klasifikasi",
-            type="primary",
-            use_container_width=True,
-            disabled=not model_loaded
-        ):
+        if st.button("🔍 Mulai Klasifikasi", type="primary", use_container_width=True, disabled=not model_ready):
+            with st.spinner("Memproses gambar..."):
+                
+                # Routing Inferensi Gatekeeper
+                if pilihan_model == "EfficientNet-B0":
+                    gk_probs, gk_pred_idx = predict_gatekeeper_effnet(gk_model, display_image, gk_mean, gk_std)
 
-            with st.spinner("Menganalisis gambar..."):
+                prob_kulit = float(gk_probs[1])
+                is_skin    = (gk_pred_idx == 1) and (prob_kulit >= GATEKEEPER_THRESHOLD)
 
-                probs, pred_idx = predict(
-                    model,
-                    display_image,
-                    MEAN,
-                    STD
-                )
+                if not is_skin:
+                    st.session_state.result = {'is_skin' : False, 'gk_probs': gk_probs}
+                else:
+                    # Routing Inferensi Penyakit
+                    if pilihan_model == "EfficientNet-B0":
+                        probs, pred_idx = predict_disease_effnet(dis_model, display_image, dis_mean, dis_std)
+                        
+                    st.session_state.result = {
+                        'is_skin': True, 'gk_probs': gk_probs, 
+                        'disease_probs': probs, 'disease_pred_idx': pred_idx,
+                        'class_names': dis_names
+                    }
 
-                st.session_state.result = (
-                    probs,
-                    pred_idx
-                )
-
-        # ==================================================
-        # HASIL KLASIFIKASI
-        # ==================================================
-        if st.session_state.result:
-
-            probs, pred_idx = st.session_state.result
-
-            pred_class = CLASS_NAMES[pred_idx]
-            confidence = probs[pred_idx] * 100
-
-            risk = CLASS_RISK[pred_class]
-            risk_icon = CLASS_RISK_ICON[risk]
-
+        # Tampilkan Hasil
+        if st.session_state.result is not None:
+            result = st.session_state.result
             st.markdown("---")
-            st.subheader("📊 Hasil Klasifikasi")
 
-            c1, c2, c3 = st.columns(3)
+            if not result['is_skin']:
+                prob_bukan, prob_kulit = result['gk_probs']
+                
+                # Menampilkan pesan error
+                st.error("""
+                ### 🚫 KLASIFIKASI DIHENTIKAN
+                **Gambar yang diunggah tidak dikenali sebagai citra yang relevan dengan distribusi dataset pelatihan Model.**
+                
+                > Sistem mendeteksi bahwa gambar ini berada di luar cakupan data pelatihan pada penelitian ini ***(HAM10000)***, sehingga proses klasifikasi penyakit tidak dapat dilanjutkan.
+                """)
+                
+                st.markdown("#### 🔍 Detail Analisis Gatekeeper")
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    st.metric(label="Di Luar Dataset Pelatihan (Out-of-Distribution)", value=f"{prob_bukan * 100:.2f}%")
+                    st.progress(float(prob_bukan))
+                with c2:
+                    st.metric(label="Sesuai Dataset Pelatihan (In-Distribution)", value=f"{prob_kulit * 100:.2f}%")
+                    st.progress(float(prob_kulit))
+            else:
+                probs = result['disease_probs']
+                pred_idx = result['disease_pred_idx']
+                CLASS_NAMES = result['class_names']
+                
+                pred_class = CLASS_NAMES[pred_idx]
+                risk = CLASS_RISK[pred_class]
 
-            c1.metric(
-                "Prediksi",
-                pred_class.upper()
-            )
+                st.caption("⚠️ Hasil ini bersifat eksperimental dan hanya untuk keperluan penelitian. **Tidak menggantikan diagnosis medis profesional.**")
+                st.subheader("📊 Hasil Klasifikasi")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Prediksi Kelas", pred_class.upper())
+                m2.metric("Kepercayaan", f"{probs[pred_idx] * 100:.1f}%")
+                m3.metric("Tingkat Risiko", f"{CLASS_RISK_ICON[risk]} {risk}")
 
-            c2.metric(
-                "Confidence",
-                f"{confidence:.2f}%"
-            )
+                color_map = {'Tinggi': 'error', 'Sedang': 'warning', 'Rendah': 'success'}
+                getattr(st, color_map[risk])(f"**{pred_class.upper()}** — {CLASS_DESCRIPTIONS[pred_class]} · {DISEASE_DESCRIPTION[pred_class]}")
 
-            c3.metric(
-                "Risiko",
-                f"{risk_icon} {risk}"
-            )
-
-            st.info(
-                f"**({pred_class.upper()})** "
-                f"{CLASS_DESCRIPTIONS[pred_class]}\n\n"
-                f"{DISEASE_DESCRIPTION[pred_class]}"
-            )
-
-            # ==========================================
-            # GRAFIK PROBABILITAS
-            # ==========================================
-
-            # ── Horizontal bar chart semua probabilitas ───────────────────────
-            sorted_idx   = np.argsort(probs)        # ascending untuk plotly y-axis
-            sorted_names = [CLASS_NAMES[i].upper() for i in sorted_idx]
-            sorted_probs = [float(probs[i]) * 100  for i in sorted_idx]
-            bar_colors   = [
-                '#E53E3E' if CLASS_RISK[CLASS_NAMES[i]] == 'Tinggi'
-                else '#DD6B20' if CLASS_RISK[CLASS_NAMES[i]] == 'Sedang'
-                else '#38A169'
-                for i in sorted_idx
-            ]
-            # Highlight predicted class
-            bar_opacity = [
-                1.0 if CLASS_NAMES[i] == pred_class else 0.55
-                for i in sorted_idx
-            ]
-
-            fig = go.Figure(go.Bar(
-                x           = sorted_probs,
-                y           = sorted_names,
-                orientation = 'h',
-                marker      = dict(color=bar_colors, opacity=bar_opacity),
-                text        = [f"{p:.1f}%" for p in sorted_probs],
-                textposition= 'outside',
-                cliponaxis  = False,
-            ))
-            fig.update_layout(
-                title       = "Distribusi Probabilitas Seluruh Kelas",
-                xaxis_title = "Probabilitas (%)",
-                xaxis       = dict(range=[0, 115], showgrid=True,
-                                   gridcolor='rgba(0,0,0,0.07)'),
-                yaxis       = dict(showgrid=False),
-                height      = 310,
-                margin      = dict(l=10, r=70, t=44, b=30),
-                plot_bgcolor  = 'rgba(0,0,0,0)',
-                paper_bgcolor = 'rgba(0,0,0,0)',
-                font          = dict(size=12),
-                showlegend    = False,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.caption(
-                "⚠️ Hasil ini bersifat eksperimental dan hanya untuk keperluan "
-                "penelitian. **Tidak menggantikan diagnosis medis profesional.**"
-            )
-
-    else:
-        st.info(
-            "Silakan unggah gambar atau pilih contoh gambar di sebelah kanan."
-        )
+                sorted_idx   = np.argsort(probs)
+                sorted_names = [CLASS_NAMES[i].upper() for i in sorted_idx]
+                sorted_probs = [float(probs[i]) * 100 for i in sorted_idx]
+                bar_colors   = ['#E53E3E' if CLASS_RISK[CLASS_NAMES[i]] == 'Tinggi' else '#DD6B20' if CLASS_RISK[CLASS_NAMES[i]] == 'Sedang' else '#38A169' for i in sorted_idx]
+                
+                fig = go.Figure(go.Bar(
+                    x=sorted_probs, y=sorted_names, orientation='h',
+                    marker=dict(color=bar_colors), text=[f"{p:.1f}%" for p in sorted_probs], textposition='outside'
+                ))
+                fig.update_layout(
+                    title="Distribusi Probabilitas", xaxis_title="Probabilitas (%)", 
+                    xaxis=dict(range=[0, 115]), yaxis=dict(showgrid=False), 
+                    height=310, margin=dict(l=10, r=70, t=44, b=30)
+                )
+                st.plotly_chart(fig, use_container_width=True)
