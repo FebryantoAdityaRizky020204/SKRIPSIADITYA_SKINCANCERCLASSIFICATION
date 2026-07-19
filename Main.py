@@ -98,8 +98,8 @@ with col_dropdown:
         "Pilih Arsitektur Model:",
         [
             "EfficientNet-B0", 
-            "Vision Mamba - Tidak Tersedia di env ini",
-            "Hybrid (EfficientNet + Vision Mamba) - Tidak Tersedia di env ini", 
+            "Vision Mamba",
+            "Hybrid (EfficientNet + Vision Mamba)", 
         ],
         label_visibility="collapsed",
         on_change=reset_hasil
@@ -121,8 +121,10 @@ if pilihan_model == "EfficientNet-B0":
     except Exception as e:
         st.error(f"Gagal memuat model EfficientNet: {e}")
 
-elif pilihan_model in ["Hybrid (EfficientNet + Vision Mamba) - Tidak Tersedia di env ini", "Vision Mamba - Tidak Tersedia di env ini"]:
+elif pilihan_model in ["Hybrid (EfficientNet + Vision Mamba)", "Vision Mamba"]:
     st.error(f"⚠️ **Model {pilihan_model} tidak dapat berjalan di environment ini.**\n\nLibrary yang dibutuhkan tidak lengkap (berjalan di server tanpa GPU)")
+
+
 
 # =============================================================================
 # LAYOUT UTAMA
@@ -198,21 +200,21 @@ with col1:
                 
                 # Menampilkan pesan error
                 st.error("""
-                ### 🚫 KLASIFIKASI DIHENTIKAN
-                **Gambar yang diunggah tidak dikenali sebagai citra yang relevan dengan distribusi dataset pelatihan Model.**
+                ### 🚫 MAAF, GAMBAR TIDAK DIKENALI
+                :small[*Pastikan Gambar Yang Anda Upload Sesuai Dengan Kriteria 7 Penyakit Kulit Yaitu: (Melanocytic nevi (nv), Melanoma (mel), Benign keratosis-like lesions (bkl), Basal cell carcinoma (bcc), Actinic keratoses and intraepithelial carcinoma (akiec), Vascular lesions (vasc), Dermatofibroma (df) )*]
                 
                 > Sistem mendeteksi bahwa gambar ini berada di luar cakupan data pelatihan pada penelitian ini ***(HAM10000)***, sehingga proses klasifikasi penyakit tidak dapat dilanjutkan.
                 """)
-                
-                st.markdown("#### 🔍 Detail Analisis Gatekeeper")
-                c1, c2 = st.columns(2)
-                
-                with c1:
-                    st.metric(label="Di Luar Dataset Pelatihan (Out-of-Distribution)", value=f"{prob_bukan * 100:.2f}%")
-                    st.progress(float(prob_bukan))
-                with c2:
-                    st.metric(label="Sesuai Dataset Pelatihan (In-Distribution)", value=f"{prob_kulit * 100:.2f}%")
-                    st.progress(float(prob_kulit))
+
+                with st.expander("Detail Analisis Gambar", icon="🔍"):
+                    c1, c2 = st.columns(2)
+                    
+                    with c1:
+                        st.metric(label="Di Luar Dataset Pelatihan (Out-of-Distribution)", value=f"{prob_bukan * 100:.2f}%")
+                        st.progress(float(prob_bukan))
+                    with c2:
+                        st.metric(label="Sesuai Dataset Pelatihan (In-Distribution)", value=f"{prob_kulit * 100:.2f}%")
+                        st.progress(float(prob_kulit))
             else:
                 probs = result['disease_probs']
                 pred_idx = result['disease_pred_idx']
@@ -235,14 +237,16 @@ with col1:
                 sorted_names = [CLASS_NAMES[i].upper() for i in sorted_idx]
                 sorted_probs = [float(probs[i]) * 100 for i in sorted_idx]
                 bar_colors   = ['#E53E3E' if CLASS_RISK[CLASS_NAMES[i]] == 'Tinggi' else '#DD6B20' if CLASS_RISK[CLASS_NAMES[i]] == 'Sedang' else '#38A169' for i in sorted_idx]
-                
-                fig = go.Figure(go.Bar(
-                    x=sorted_probs, y=sorted_names, orientation='h',
-                    marker=dict(color=bar_colors), text=[f"{p:.1f}%" for p in sorted_probs], textposition='outside'
-                ))
-                fig.update_layout(
-                    title="Distribusi Probabilitas", xaxis_title="Probabilitas (%)", 
-                    xaxis=dict(range=[0, 115]), yaxis=dict(showgrid=False), 
-                    height=310, margin=dict(l=10, r=70, t=44, b=30)
-                )
-                st.plotly_chart(fig, use_container_width=True)
+
+
+                with st.expander("Distribusi Probabilitas", icon="📃"):
+                    fig = go.Figure(go.Bar(
+                        x=sorted_probs, y=sorted_names, orientation='h',
+                        marker=dict(color=bar_colors), text=[f"{p:.1f}%" for p in sorted_probs], textposition='outside'
+                    ))
+                    fig.update_layout(
+                        title="Distribusi Probabilitas/Kepercayaan", xaxis_title="Probabilitas (%)", 
+                        xaxis=dict(range=[0, 115]), yaxis=dict(showgrid=False), 
+                        height=310, margin=dict(l=10, r=70, t=44, b=30)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
